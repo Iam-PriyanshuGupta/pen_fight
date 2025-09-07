@@ -117,13 +117,13 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = {
-          apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
-          authDomain: "game-74628.firebaseapp.com",
-          projectId: "game-74628",
-          storageBucket: "game-74628.firebasestorage.app",
-          messagingSenderId: "609648882792",
-          appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
+            authDomain: "game-74628.firebaseapp.com",
+            projectId: "game-74628",
+            storageBucket: "game-74628.firebasestorage.app",
+            messagingSenderId: "609648882792",
+            appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
         };
         
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'pen-fight-arena-default';
@@ -189,7 +189,7 @@
             document.getElementById('start-game-btn').addEventListener('click', () => {
                 if(isCreator) updateDoc(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), { status: 'playing' });
             });
-            document.getElementById('player-name-input').addEventListener('change', updatePlayerDetails);
+            document.getElementById('player-name-input').addEventListener('change', (e) => updatePlayerDetails(e.target.value, undefined));
             document.getElementById('chat-input').addEventListener('keydown', handleChat);
             document.getElementById('back-to-menu-btn').addEventListener('click', resetToStart);
             document.getElementById('play-again-btn').addEventListener('click', resetToStart);
@@ -328,8 +328,8 @@
         });
 
         async function updatePlayerDetails(name, color) {
-            if (!gameId || gameId === 'SOLO_GAME') return;
-            const newName = name !== undefined ? name : (document.getElementById('player-name-input').value.trim() || `Player ${localPlayerInfo.id.slice(-1)}`);
+            if (!gameId || gameId === 'SOLO_GAME' || !localPlayerInfo) return;
+            const newName = name !== undefined ? name : (localPlayerInfo.name || `Player ${localPlayerInfo.id.slice(-1)}`);
             const newColor = color !== undefined ? color : localPlayerInfo.color;
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await updateDoc(gameRef, {
