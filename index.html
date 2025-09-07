@@ -116,7 +116,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- PASTE YOUR FIREBASE CONFIG FROM YOUR PROJECT'S SETTINGS HERE ---
+        
         const firebaseConfig = {
           apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
           authDomain: "game-74628.firebaseapp.com",
@@ -204,7 +204,7 @@
             players[p1.uid] = p1;
             players[p2.uid] = p2;
             localPlayerInfo = p1;
-            const gameData = { players, numPlayers, turn: 'player1', status: 'playing', events: [], chatMessages: [], gameRound: 1 };
+            const gameData = { players, numPlayers, turn: 'player1', status: 'playing', events: [], chatMessages: [], gameRound: (window.soloGameState?.gameRound || 0) + 1 };
             window.soloGameState = gameData;
             currentGameData = gameData;
             startGame(gameData);
@@ -267,15 +267,6 @@
                 
                 if (gameData.status === 'playing' && (engine === undefined || lastGameRound !== gameData.gameRound)) {
                     lastGameRound = gameData.gameRound;
-                    if(isCreator && gameData.rematchVotes?.length === gameData.numPlayers) {
-                         const batch = writeBatch(db);
-                         const updates = { turn: 'player1', events: [], lastElimination: null, rematchVotes: [] };
-                         Object.keys(gameData.players).forEach(uid => {
-                             updates[`players.${uid}.isOut`] = false;
-                         });
-                         batch.update(gameRef, updates);
-                         batch.commit();
-                    }
                     startGame(gameData);
                 }
                 
@@ -440,17 +431,14 @@
             Matter.Events.on(render, 'afterRender', () => {
                 if (isDragging && dragStartPos && dragEndPos) {
                     const ctx = render.context;
-                    const myBody = bodies[localPlayerInfo.id];
-                    if (!myBody) return;
-
-                    const angle = Matter.Vector.angle(dragEndPos, dragStartPos);
+                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos); // This is the INVERSE of the shot angle
                     const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
                     const maxLineLength = 50;
                     const displayLength = Math.min(power, maxLineLength);
 
                     ctx.beginPath();
-                    ctx.moveTo(myBody.position.x, myBody.position.y);
-                    ctx.lineTo(myBody.position.x + Math.cos(angle) * displayLength, myBody.position.y + Math.sin(angle) * displayLength);
+                    ctx.moveTo(dragStartPos.x, dragStartPos.y);
+                    ctx.lineTo(dragStartPos.x + Math.cos(angle) * displayLength, dragStartPos.y + Math.sin(angle) * displayLength);
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
                     ctx.lineWidth = 3;
                     ctx.setLineDash([5, 5]);
@@ -495,7 +483,7 @@
                 e.preventDefault(); if (!isDragging) return;
                 isDragging = false;
                 const forceMagnitude = Matter.Vector.magnitude(Matter.Vector.sub(dragEndPos, dragStartPos)) * 0.002;
-                const forceAngle = Matter.Vector.angle(dragStartPos, dragEndPos);
+                const forceAngle = Matter.Vector.angle(dragEndPos, dragStartPos); // SLINGSHOT: force is opposite to drag
                 const forceVector = { x: Math.cos(forceAngle) * forceMagnitude, y: Math.sin(forceAngle) * forceMagnitude };
                 const event = { type: 'flick', playerId: localPlayerInfo.id, force: forceVector, position: dragStartPos };
                 if (gameId === 'SOLO_GAME') processEvents([event]);
