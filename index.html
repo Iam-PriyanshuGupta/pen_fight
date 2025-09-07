@@ -81,6 +81,7 @@
         <div class="pt-4 space-y-2">
              <input type="text" id="join-id-input" placeholder="Or enter Game ID to join" class="text-center w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-400">
              <button id="join-game-btn" class="btn w-full text-white font-bold py-2 px-4 rounded-lg">Join Game</button>
+             <button id="start-game-btn" class="hidden btn w-full bg-green-600 border-green-800 hover:bg-green-500 text-white font-bold py-2 px-4 rounded-lg">Start Game</button>
              <button id="back-to-menu-btn" class="btn w-full bg-red-600 border-red-800 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-lg">Main Menu</button>
         </div>
         <p id="lobby-error" class="text-red-400 h-4"></p>
@@ -116,7 +117,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        
+        // --- PASTE YOUR FIREBASE CONFIG FROM YOUR PROJECT'S SETTINGS HERE ---
         const firebaseConfig = {
           apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
           authDomain: "game-74628.firebaseapp.com",
@@ -187,6 +188,9 @@
             });
             document.getElementById('game-id-display').addEventListener('click', () => navigator.clipboard.writeText(gameId));
             document.getElementById('join-game-btn').addEventListener('click', () => joinGame(false));
+            document.getElementById('start-game-btn').addEventListener('click', () => {
+                if(isCreator) updateDoc(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), { status: 'playing' });
+            });
             document.getElementById('player-name-input').addEventListener('change', updatePlayerDetails);
             document.getElementById('chat-input').addEventListener('keydown', handleChat);
             document.getElementById('back-to-menu-btn').addEventListener('click', resetToStart);
@@ -260,11 +264,6 @@
                 
                 if (gameData.status === 'waiting') updateLobbyUI(gameData);
                 
-                const playerCount = Object.keys(gameData.players).length;
-                if (gameData.status === 'waiting' && playerCount === gameData.numPlayers && isCreator) {
-                    updateDoc(gameRef, { status: 'playing' });
-                }
-                
                 if (gameData.status === 'playing' && (engine === undefined || lastGameRound !== gameData.gameRound)) {
                     lastGameRound = gameData.gameRound;
                     startGame(gameData);
@@ -274,6 +273,9 @@
                     if (gameData.lastElimination?.timestamp > lastEliminationTimestamp) {
                         lastEliminationTimestamp = gameData.lastElimination.timestamp;
                         displayEliminationMessage(gameData.lastElimination.eliminator, gameData.lastElimination.eliminated);
+                    }
+                    if(!isCreator) { // Clients update their physics state from the host
+                        updateBodiesFromState(gameData.gameState);
                     }
                     updateRematchStatus(gameData);
                     updateChatUI(gameData.chatMessages);
@@ -287,7 +289,9 @@
         
         function updateLobbyUI(gameData) {
             const players = Object.values(gameData.players);
-            document.getElementById('player-count').innerText = players.length;
+            const playerCount = players.length;
+            document.getElementById('player-count').innerText = playerCount;
+            document.getElementById('max-players').innerText = gameData.numPlayers;
             const playerList = document.getElementById('player-list');
             playerList.innerHTML = '';
             players.forEach(player => {
@@ -296,6 +300,13 @@
                 playerList.appendChild(li);
             });
             renderColorSelector(gameData);
+
+            const startBtn = document.getElementById('start-game-btn');
+            if (isCreator && playerCount === gameData.numPlayers) {
+                startBtn.classList.remove('hidden');
+            } else {
+                startBtn.classList.add('hidden');
+            }
         }
         
         function renderColorSelector(gameData) {
@@ -410,28 +421,41 @@
             Matter.Composite.add(engine.world, Object.values(bodies));
             
             runner = Matter.Runner.create();
-            Matter.Runner.run(runner, engine);
             Matter.Render.run(render);
+            if (isCreator) { // Only the host runs the physics simulation
+                Matter.Runner.run(runner, engine);
+            }
 
             setupMouseControl();
             
-            Matter.Events.on(engine, 'afterUpdate', () => {
-                if(isGameOver) return;
-                Object.values(bodies).forEach(body => {
-                    const dist = Math.hypot(body.position.x - containerWidth/2, body.position.y - containerHeight/2);
-                    if (dist > radius) handlePlayerOut(body.label);
+            if (isCreator) {
+                Matter.Events.on(engine, 'afterUpdate', () => {
+                    if(isGameOver) return;
+                    Object.values(bodies).forEach(body => {
+                        const dist = Math.hypot(body.position.x - containerWidth/2, body.position.y - containerHeight/2);
+                        if (dist > radius) handlePlayerOut(body.label);
+                    });
+                    const isMoving = Object.values(bodies).some(body => Matter.Vector.magnitude(body.velocity) > 0.15 || Math.abs(body.angularVelocity) > 0.015);
+                    if (hasFlicked && !isMoving) {
+                        hasFlicked = false;
+                        advanceTurn();
+                    }
+                    // Host sends gamestate to clients
+                    const gameState = {};
+                    Object.keys(bodies).forEach(id => {
+                        const body = bodies[id];
+                        gameState[id] = { x: body.position.x, y: body.position.y, angle: body.angle };
+                    });
+                    if (gameId !== 'SOLO_GAME') {
+                        updateDoc(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), { gameState });
+                    }
                 });
-                const isMoving = Object.values(bodies).some(body => Matter.Vector.magnitude(body.velocity) > 0.15 || Math.abs(body.angularVelocity) > 0.015);
-                if (hasFlicked && !isMoving) {
-                    hasFlicked = false;
-                    if (isCreator) advanceTurn();
-                }
-            });
+            }
 
             Matter.Events.on(render, 'afterRender', () => {
                 if (isDragging && dragStartPos && dragEndPos) {
                     const ctx = render.context;
-                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos); // This is the INVERSE of the shot angle
+                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos);
                     const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
                     const maxLineLength = 50;
                     const displayLength = Math.min(power, maxLineLength);
@@ -483,7 +507,7 @@
                 e.preventDefault(); if (!isDragging) return;
                 isDragging = false;
                 const forceMagnitude = Matter.Vector.magnitude(Matter.Vector.sub(dragEndPos, dragStartPos)) * 0.002;
-                const forceAngle = Matter.Vector.angle(dragEndPos, dragStartPos); // SLINGSHOT: force is opposite to drag
+                const forceAngle = Matter.Vector.angle(dragEndPos, dragStartPos);
                 const forceVector = { x: Math.cos(forceAngle) * forceMagnitude, y: Math.sin(forceAngle) * forceMagnitude };
                 const event = { type: 'flick', playerId: localPlayerInfo.id, force: forceVector, position: dragStartPos };
                 if (gameId === 'SOLO_GAME') processEvents([event]);
@@ -572,8 +596,10 @@
             events.forEach(event => {
                 if (event.type === 'flick') {
                     hasFlicked = true;
-                    const body = bodies[event.playerId];
-                    if(body) Matter.Body.applyForce(body, event.position, event.force);
+                    if(isCreator) { // Only host processes flick physics
+                        const body = bodies[event.playerId];
+                        if(body) Matter.Body.applyForce(body, event.position, event.force);
+                    }
                 } else if (event.type === 'out') {
                     const body = bodies[event.playerId];
                     if (body && !body.isOut) {
@@ -619,6 +645,18 @@
                 }
             }
         }
+
+        function updateBodiesFromState(gameState) {
+             if (!gameState || isCreator) return;
+             Object.keys(gameState).forEach(playerId => {
+                 const body = bodies[playerId];
+                 const state = gameState[playerId];
+                 if (body && state) {
+                     Matter.Body.setPosition(body, { x: state.x, y: state.y });
+                     Matter.Body.setAngle(body, state.angle);
+                 }
+             });
+        }
         
         function checkForWinner(gameData) {
             if (isGameOver || !gameData.players) return;
@@ -636,33 +674,16 @@
                 const votes = gameData.rematchVotes || [];
                 const readyPlayers = Object.values(gameData.players).filter(p => votes.includes(p.uid));
                 statusEl.innerHTML = `Ready for rematch: ${readyPlayers.map(p => p.name).join(', ')}`;
-
-                if(readyPlayers.length === gameData.numPlayers && isCreator){
-                     const batch = writeBatch(db);
-                     const updates = { 
-                         status: 'playing',
-                         turn: 'player1', 
-                         events: [], 
-                         lastElimination: null, 
-                         rematchVotes: [], 
-                         gameRound: (gameData.gameRound || 1) + 1 
-                    };
-                     Object.keys(gameData.players).forEach(uid => {
-                         updates[`players.${uid}.isOut`] = false;
-                     });
-                     batch.update(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), updates);
-                     batch.commit();
-                }
             }
         }
         
         async function requestRematch() {
-            document.getElementById('rematch-btn').disabled = true;
-            document.getElementById('end-screen-status').innerText = 'Rematch requested! Waiting for others...';
             if (gameId === 'SOLO_GAME') {
                 startSoloGame();
                 return;
             }
+            document.getElementById('rematch-btn').disabled = true;
+            document.getElementById('end-screen-status').innerText = 'Rematch requested! Waiting for others...';
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await updateDoc(gameRef, {
                 rematchVotes: arrayUnion(userId)
@@ -673,7 +694,6 @@
             document.getElementById('winner-display').innerText = winnerText;
             gameScreen.classList.add('hidden');
             endScreen.classList.remove('hidden');
-            if (gameUnsubscribe) { gameUnsubscribe(); gameUnsubscribe = null; }
             if (runner) Matter.Runner.stop(runner);
             if (render) { Matter.Render.stop(render); render.canvas.remove(); }
             engine = undefined;
