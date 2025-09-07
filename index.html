@@ -102,8 +102,11 @@
     <div id="end-screen" class="hidden fixed inset-0 flex items-center justify-center z-50">
         <div class="modal border-2 border-yellow-400 text-center p-10 rounded-xl space-y-6">
             <h2 id="winner-display" class="custom-font text-5xl"></h2>
-            <p>Excellent match!</p>
-            <button id="play-again-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg">Back to Menu</button>
+            <p id="end-screen-status">Excellent match!</p>
+            <div class="flex gap-4">
+                <button id="play-again-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg">Main Menu</button>
+                <button id="rematch-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg bg-green-600 border-green-800 hover:bg-green-500">Rematch</button>
+            </div>
         </div>
     </div>
     
@@ -122,7 +125,7 @@
             appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
         };
         // --------------------------------------------------------------------
-
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'pen-fight-arena-default';
         
         let app, auth, db, userId;
@@ -135,6 +138,7 @@
         let currentGameData = {};
         let lastEliminationTimestamp = 0;
         let isCreator = false;
+        let lastGameRound = 0;
         
         let engine, render, runner;
         const bodies = {}; 
@@ -182,27 +186,26 @@
             });
             document.getElementById('game-id-display').addEventListener('click', () => navigator.clipboard.writeText(gameId));
             document.getElementById('join-game-btn').addEventListener('click', () => joinGame(false));
-            document.getElementById('play-again-btn').addEventListener('click', resetToStart);
             document.getElementById('player-name-input').addEventListener('change', updatePlayerDetails);
             document.getElementById('chat-input').addEventListener('keydown', handleChat);
             document.getElementById('back-to-menu-btn').addEventListener('click', resetToStart);
+            document.getElementById('play-again-btn').addEventListener('click', resetToStart);
+            document.getElementById('rematch-btn').addEventListener('click', requestRematch);
         }
 
         function startSoloGame() {
             gameId = 'SOLO_GAME';
-            numPlayers = 2; // 1v1 match
+            numPlayers = 2;
             isCreator = true;
-            
             const players = {};
             const p1 = { id: 'player1', uid: userId, name: 'You', color: 'red', isAI: false, isOut: false };
             const p2 = { id: 'player2', uid: 'AI_1', name: 'Computer', color: 'blue', isAI: true, isOut: false };
             players[p1.uid] = p1;
             players[p2.uid] = p2;
             localPlayerInfo = p1;
-
-            const gameData = { players, numPlayers, turn: 'player1', status: 'playing', events: [], chatMessages: [] };
+            const gameData = { players, numPlayers, turn: 'player1', status: 'playing', events: [], chatMessages: [], gameRound: 1 };
             window.soloGameState = gameData;
-            currentGameData = gameData; 
+            currentGameData = gameData;
             startGame(gameData);
         }
 
@@ -212,7 +215,7 @@
             document.getElementById('max-players').innerText = numPlayers;
             gameId = Math.random().toString(36).substring(2, 7).toUpperCase();
             document.getElementById('game-id-display').innerText = gameId;
-            const gameData = { numPlayers, players: {}, status: 'waiting', turn: 'player1', events: [], chatMessages: [], creatorId: userId };
+            const gameData = { numPlayers, players: {}, status: 'waiting', turn: 'player1', events: [], chatMessages: [], creatorId: userId, gameRound: 1 };
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await setDoc(gameRef, gameData);
             await joinGame(true);
@@ -238,7 +241,6 @@
                 const newPlayerName = `Player ${players.length + 1}`;
                 const takenColors = players.map(p => p.color);
                 const availableColor = Object.keys(availableColors).find(c => !takenColors.includes(c)) || 'red';
-
                 await updateDoc(gameRef, {
                     [`players.${userId}`]: { id: newPlayerId, uid: userId, name: newPlayerName, color: availableColor, isAI: false, isOut: false }
                 });
@@ -260,7 +262,10 @@
                 if (gameData.status === 'waiting' && playerCount === gameData.numPlayers) {
                     updateDoc(gameRef, { status: 'playing' });
                 }
-                if (gameData.status === 'playing' && !engine) startGame(gameData);
+                if (gameData.status === 'playing' && (engine === undefined || lastGameRound !== gameData.gameRound)) {
+                    lastGameRound = gameData.gameRound;
+                    startGame(gameData);
+                }
                 if (engine) {
                     if (gameData.lastElimination?.timestamp > lastEliminationTimestamp) {
                         lastEliminationTimestamp = gameData.lastElimination.timestamp;
@@ -414,7 +419,7 @@
                 const isMoving = Object.values(bodies).some(body => Matter.Vector.magnitude(body.velocity) > 0.15 || Math.abs(body.angularVelocity) > 0.015);
                 if (hasFlicked && !isMoving) {
                     hasFlicked = false;
-                    advanceTurn();
+                    if (isCreator) advanceTurn();
                 }
             });
 
@@ -478,7 +483,7 @@
                     const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
                     updateDoc(gameRef, { events: [event] });
                 }
-                hasFlicked = true; isMyTurn = false;
+                isMyTurn = false;
                 dragStartPos = null; dragEndPos = null;
             };
             canvas.addEventListener('pointerdown', handlePointerDown);
@@ -488,9 +493,12 @@
         }
 
         function startGame(gameData) {
+            endScreen.classList.add('hidden');
             gameScreen.classList.remove('hidden');
             startScreen.classList.add('hidden');
             lobbyScreen.classList.add('hidden');
+            document.getElementById('rematch-btn').disabled = false;
+            document.getElementById('end-screen-status').innerText = 'Excellent match!';
             initPhysics(gameData);
             handleTurnChange(gameData);
             updatePlayerLegend(gameData);
@@ -530,20 +538,14 @@
             const forcePosition = { x: aiBody.position.x + (Math.random() - 0.5) * 10, y: aiBody.position.y + (Math.random() - 0.5) * 40 };
             const event = { type: 'flick', playerId: aiPlayerId, force, position: forcePosition };
             processEvents([event]);
-            setTimeout(() => { hasFlicked = true; }, 500);
         }
 
         async function advanceTurn() {
             if (isGameOver) return;
             let gameData = (gameId === 'SOLO_GAME') ? window.soloGameState : currentGameData;
+            
+            if (gameId !== 'SOLO_GAME' && !isCreator) return;
 
-            if (gameId !== 'SOLO_GAME') {
-                 if (!isCreator) return;
-                 const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
-                 const gameSnap = await getDoc(gameRef);
-                 if (!gameSnap.exists()) return;
-                 gameData = gameSnap.data();
-            }
             const activePlayers = Object.values(gameData.players).filter(p => !p.isOut).sort((a,b) => a.id.localeCompare(b.id));
             if (activePlayers.length < 2) { checkForWinner(gameData); return; }
             const currentIndex = activePlayers.findIndex(p => p.id === gameData.turn);
@@ -560,6 +562,7 @@
             if (!events?.length) return;
             events.forEach(event => {
                 if (event.type === 'flick') {
+                    hasFlicked = true;
                     const body = bodies[event.playerId];
                     if(body) Matter.Body.applyForce(body, event.position, event.force);
                 } else if (event.type === 'out') {
@@ -594,7 +597,7 @@
                 displayEliminationMessage(eliminatorName, eliminatedName);
                 updatePlayerLegend(window.soloGameState);
                 checkForWinner(window.soloGameState);
-            } else if (isMyTurn) {
+            } else if (isCreator) {
                 const playerEntry = Object.entries(gameData.players).find(([uid, data]) => data.id === playerId);
                 if (playerEntry) {
                     const playerUID = playerEntry[0];
@@ -618,6 +621,37 @@
             }
         }
         
+        async function requestRematch() {
+            if (gameId === 'SOLO_GAME') {
+                startSoloGame();
+                return;
+            }
+            document.getElementById('rematch-btn').disabled = true;
+            document.getElementById('end-screen-status').innerText = 'Rematch requested! Waiting for others...';
+            const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+            await updateDoc(gameRef, {
+                rematchVotes: arrayUnion(userId)
+            });
+
+            const gameSnap = await getDoc(gameRef);
+            const gameData = gameSnap.data();
+            if (gameData.rematchVotes?.length === gameData.numPlayers && isCreator) {
+                const batch = writeBatch(db);
+                const updates = {
+                    turn: 'player1',
+                    events: [],
+                    lastElimination: null,
+                    rematchVotes: [],
+                    gameRound: (gameData.gameRound || 1) + 1
+                };
+                Object.keys(gameData.players).forEach(uid => {
+                    updates[`players.${uid}.isOut`] = false;
+                });
+                batch.update(gameRef, updates);
+                await batch.commit();
+            }
+        }
+        
         function endGame(winnerText) {
             document.getElementById('winner-display').innerText = winnerText;
             gameScreen.classList.add('hidden');
@@ -625,14 +659,11 @@
             if (gameUnsubscribe) { gameUnsubscribe(); gameUnsubscribe = null; }
             if (runner) Matter.Runner.stop(runner);
             if (render) { Matter.Render.stop(render); render.canvas.remove(); }
-            engine = null;
+            engine = undefined; // Set engine to undefined to allow re-initialization
         }
 
         async function resetToStart() {
-            if (gameUnsubscribe) {
-                gameUnsubscribe();
-                gameUnsubscribe = null;
-            }
+            if (gameUnsubscribe) { gameUnsubscribe(); gameUnsubscribe = null; }
             if(gameId && gameId !== 'SOLO_GAME' && isCreator) {
                 try {
                     const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
