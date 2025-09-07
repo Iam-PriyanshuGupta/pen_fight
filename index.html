@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Pen Fight Arena (Final)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c;
+            color: #e2e8f0;
+            touch-action: none; 
+        }
+        .custom-font { font-family: 'Bangers', cursive; }
+        .modal { background-color: rgba(45, 55, 72, 0.9); backdrop-filter: blur(5px); }
+        .btn {
+            background-color: #4c51bf;
+            border-bottom: 4px solid #3c4199;
+            transition: all 0.1s ease-in-out;
+            transform-style: preserve-3d;
+        }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); border-bottom-width: 6px; }
+        .btn:active:not(:disabled) { transform: translateY(2px); border-bottom-width: 2px; }
+        .btn:disabled { background-color: #4a5568; border-color: #2d3748; cursor: not-allowed; opacity: 0.6; }
+        input[type="text"] { background-color: #2d3748; border: 2px solid #4a5568; }
+        #game-container {
+            width: 100%;
+            max-width: 600px;
+            aspect-ratio: 1 / 1;
+            margin: auto;
+        }
+        canvas {
+            background-image: url('https://www.transparenttextures.com/patterns/wood-table.png');
+            background-color: #8c5a2b;
+            border-radius: 50%;
+            box-shadow: 0 0 30px rgba(0,0,0,0.7), inset 0 0 20px rgba(0,0,0,0.5);
+        }
+        .color-swatch {
+            width: 30px; height: 30px; border-radius: 50%; cursor: pointer; border: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        .color-swatch.selected { border-color: #fff; box-shadow: 0 0 10px #fff; transform: scale(1.1); }
+        .color-swatch.taken { cursor: not-allowed; filter: grayscale(80%) brightness(50%); }
+        #chat-messages { max-height: 100px; }
+        #chat-messages::-webkit-scrollbar { width: 5px; }
+        #chat-messages::-webkit-scrollbar-track { background: #2d3748; }
+        #chat-messages::-webkit-scrollbar-thumb { background: #4a5568; border-radius: 5px;}
+        .player-out { text-decoration: line-through; opacity: 0.5; }
+    </style>
+</head>
+<body class="w-screen h-screen flex items-center justify-center overflow-hidden">
+
+    <div id="start-screen" class="text-center space-y-6 p-8 rounded-lg modal border-2 border-indigo-500 shadow-lg">
+        <h1 class="custom-font text-6xl text-yellow-300 tracking-wider">Pen Fight!</h1>
+        <div id="player-select-buttons" class="grid grid-cols-2 gap-4">
+            <button class="player-select-btn btn text-white font-bold py-3 px-5 rounded-lg text-lg" data-players="1">1 Player</button>
+            <button class="player-select-btn btn text-white font-bold py-3 px-5 rounded-lg text-lg" data-players="2">2 Players</button>
+            <button class="player-select-btn btn text-white font-bold py-3 px-5 rounded-lg text-lg" data-players="3">3 Players</button>
+            <button class="player-select-btn btn text-white font-bold py-3 px-5 rounded-lg text-lg" data-players="4">4 Players</button>
+        </div>
+        <p id="start-status" class="text-yellow-400 h-4">Connecting to server...</p>
+    </div>
+    
+    <div id="lobby-screen" class="hidden w-11/12 max-w-md text-center space-y-4 p-8 rounded-lg modal border-2 border-teal-500 shadow-lg">
+        <h2 class="custom-font text-4xl text-teal-300">Game Lobby</h2>
+        <div class="space-y-3">
+            <input type="text" id="player-name-input" placeholder="Enter Your Name" maxlength="12" class="text-center w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-400">
+            <div id="color-selector" class="flex justify-center gap-3"></div>
+        </div>
+        <p>Share this Game ID with your friends:</p>
+        <div class="bg-gray-800 p-3 rounded-lg">
+            <strong id="game-id-display" class="text-2xl text-yellow-300 cursor-pointer" title="Click to copy"></strong>
+        </div>
+        <div>
+            <h3 class="font-semibold mb-2">Players Joined (<span id="player-count">1</span>/<span id="max-players">?</span>):</h3>
+            <ul id="player-list" class="space-y-1"></ul>
+        </div>
+        <div class="pt-4 space-y-2">
+             <input type="text" id="join-id-input" placeholder="Or enter Game ID to join" class="text-center w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-400">
+             <button id="join-game-btn" class="btn w-full text-white font-bold py-2 px-4 rounded-lg">Join Game</button>
+             <button id="back-to-menu-btn" class="btn w-full bg-red-600 border-red-800 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-lg">Main Menu</button>
+        </div>
+        <p id="lobby-error" class="text-red-400 h-4"></p>
+    </div>
+
+    <div id="game-screen" class="hidden relative w-full h-full flex flex-col items-center justify-center p-2 sm:p-4">
+        <div id="turn-indicator" class="mb-2 sm:mb-4 text-center p-3 rounded-lg bg-gray-900 bg-opacity-50 z-10">
+            <h2 id="turn-text" class="custom-font text-2xl sm:text-3xl transition-colors duration-300"></h2>
+        </div>
+        <div id="game-container"></div>
+        <div id="elimination-message" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black bg-opacity-70 py-3 px-6 rounded-lg text-white text-xl sm:text-2xl custom-font opacity-0 transition-opacity duration-500 pointer-events-none z-20"></div>
+        <div id="player-legend" class="absolute top-2 right-2 sm:top-4 sm:right-4 w-auto bg-gray-900 bg-opacity-70 p-2 rounded-lg z-10 text-xs sm:text-sm"></div>
+        <div id="chat-box" class="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-2/5 max-w-xs bg-gray-900 bg-opacity-70 p-2 rounded-lg z-10">
+            <div id="chat-messages" class="overflow-y-auto text-xs sm:text-sm space-y-1 mb-2"></div>
+            <input type="text" id="chat-input" placeholder="Type..." class="w-full p-1 text-xs sm:text-sm rounded-md focus:outline-none">
+        </div>
+    </div>
+
+    <div id="end-screen" class="hidden fixed inset-0 flex items-center justify-center z-50">
+        <div class="modal border-2 border-yellow-400 text-center p-10 rounded-xl space-y-6">
+            <h2 id="winner-display" class="custom-font text-5xl"></h2>
+            <p>Excellent match!</p>
+            <button id="play-again-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg">Back to Menu</button>
+        </div>
+    </div>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
+            authDomain: "game-74628.firebaseapp.com",
+            projectId: "game-74628",
+            storageBucket: "game-74628.firebasestorage.app",
+            messagingSenderId: "609648882792",
+            appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
+        };
+        // --------------------------------------------------------------------
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'pen-fight-arena-default';
+        
+        let app, auth, db, userId;
+        let gameId = null;
+        let gameUnsubscribe = null;
+        let localPlayerInfo = {};
+        let numPlayers = 0;
+        let isMyTurn = false;
+        let isGameOver = false;
+        let currentGameData = {};
+        let lastEliminationTimestamp = 0;
+        let isCreator = false;
+        
+        let engine, render, runner;
+        const bodies = {}; 
+
+        const startScreen = document.getElementById('start-screen');
+        const lobbyScreen = document.getElementById('lobby-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const endScreen = document.getElementById('end-screen');
+        
+        const availableColors = {
+            red: { id: 'red', fill: '#ef4444', stroke: '#f87171' },
+            blue: { id: 'blue', fill: '#3b82f6', stroke: '#60a5fa' },
+            green: { id: 'green', fill: '#22c55e', stroke: '#4ade80' },
+            yellow: { id: 'yellow', fill: '#facc15', stroke: '#fde047' },
+        };
+
+        async function init() {
+            document.querySelectorAll('.player-select-btn').forEach(btn => btn.disabled = true);
+            try {
+                if (firebaseConfig.apiKey === "YOUR_API_KEY") {
+                     throw new Error("Firebase configuration is not set. Please paste your config details.");
+                }
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
+                else await signInAnonymously(auth);
+                userId = auth.currentUser.uid;
+                document.getElementById('start-status').innerText = "Ready!";
+                document.querySelectorAll('.player-select-btn').forEach(btn => btn.disabled = false);
+                setupEventListeners();
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                document.getElementById('start-status').innerText = error.message;
+            }
+        }
+
+        function setupEventListeners() {
+            document.querySelectorAll('.player-select-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    numPlayers = parseInt(btn.dataset.players);
+                    if (numPlayers === 1) startSoloGame();
+                    else showLobby();
+                });
+            });
+            document.getElementById('game-id-display').addEventListener('click', () => navigator.clipboard.writeText(gameId));
+            document.getElementById('join-game-btn').addEventListener('click', () => joinGame(false));
+            document.getElementById('play-again-btn').addEventListener('click', resetToStart);
+            document.getElementById('player-name-input').addEventListener('change', updatePlayerDetails);
+            document.getElementById('chat-input').addEventListener('keydown', handleChat);
+            document.getElementById('back-to-menu-btn').addEventListener('click', resetToStart);
+        }
+
+        function startSoloGame() {
+            gameId = 'SOLO_GAME';
+            numPlayers = 2; // 1v1 match
+            isCreator = true;
+            
+            const players = {};
+            const p1 = { id: 'player1', uid: userId, name: 'You', color: 'red', isAI: false, isOut: false };
+            const p2 = { id: 'player2', uid: 'AI_1', name: 'Computer', color: 'blue', isAI: true, isOut: false };
+            players[p1.uid] = p1;
+            players[p2.uid] = p2;
+            localPlayerInfo = p1;
+
+            const gameData = { players, numPlayers, turn: 'player1', status: 'playing', events: [], chatMessages: [] };
+            window.soloGameState = gameData;
+            currentGameData = gameData; 
+            startGame(gameData);
+        }
+
+        async function showLobby() {
+            startScreen.classList.add('hidden');
+            lobbyScreen.classList.remove('hidden');
+            document.getElementById('max-players').innerText = numPlayers;
+            gameId = Math.random().toString(36).substring(2, 7).toUpperCase();
+            document.getElementById('game-id-display').innerText = gameId;
+            const gameData = { numPlayers, players: {}, status: 'waiting', turn: 'player1', events: [], chatMessages: [], creatorId: userId };
+            const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+            await setDoc(gameRef, gameData);
+            await joinGame(true);
+        }
+        
+        async function joinGame(isHost = false) {
+            const inputId = isHost ? gameId : document.getElementById('join-id-input').value.toUpperCase();
+            if (!inputId) return;
+            isCreator = isHost;
+            const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", inputId);
+            const gameSnap = await getDoc(gameRef);
+            if (!gameSnap.exists()) {
+                document.getElementById('lobby-error').innerText = 'Game not found.'; return;
+            }
+            const gameData = gameSnap.data();
+            const players = Object.values(gameData.players);
+            if (players.length >= gameData.numPlayers && !players.some(p => p.uid === userId)) {
+                document.getElementById('lobby-error').innerText = 'Game is full.'; return;
+            }
+            gameId = inputId;
+            if (!players.some(p => p.uid === userId)) {
+                const newPlayerId = `player${players.length + 1}`;
+                const newPlayerName = `Player ${players.length + 1}`;
+                const takenColors = players.map(p => p.color);
+                const availableColor = Object.keys(availableColors).find(c => !takenColors.includes(c)) || 'red';
+
+                await updateDoc(gameRef, {
+                    [`players.${userId}`]: { id: newPlayerId, uid: userId, name: newPlayerName, color: availableColor, isAI: false, isOut: false }
+                });
+            }
+            startGameListener();
+        }
+
+        function startGameListener() {
+            if (gameUnsubscribe) gameUnsubscribe();
+            const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+            gameUnsubscribe = onSnapshot(gameRef, (docSnap) => {
+                if (!docSnap.exists()) { endGame("Host left the game."); return; }
+                const gameData = docSnap.data();
+                currentGameData = gameData;
+                if(gameData.players) localPlayerInfo = gameData.players[userId];
+                
+                if (gameData.status === 'waiting') updateLobbyUI(gameData);
+                const playerCount = Object.keys(gameData.players).length;
+                if (gameData.status === 'waiting' && playerCount === gameData.numPlayers) {
+                    updateDoc(gameRef, { status: 'playing' });
+                }
+                if (gameData.status === 'playing' && !engine) startGame(gameData);
+                if (engine) {
+                    if (gameData.lastElimination?.timestamp > lastEliminationTimestamp) {
+                        lastEliminationTimestamp = gameData.lastElimination.timestamp;
+                        displayEliminationMessage(gameData.lastElimination.eliminator, gameData.lastElimination.eliminated);
+                    }
+                    updateChatUI(gameData.chatMessages);
+                    updatePlayerLegend(gameData);
+                    handleTurnChange(gameData);
+                    processEvents(gameData.events);
+                    checkForWinner(gameData);
+                }
+            });
+        }
+        
+        function updateLobbyUI(gameData) {
+            const players = Object.values(gameData.players);
+            document.getElementById('player-count').innerText = players.length;
+            const playerList = document.getElementById('player-list');
+            playerList.innerHTML = '';
+            players.forEach(player => {
+                const li = document.createElement('li');
+                li.innerHTML = `<span style="color: ${availableColors[player.color].stroke}">${player.name} ${player.uid === userId ? "(You)" : ""}</span>`;
+                playerList.appendChild(li);
+            });
+            renderColorSelector(gameData);
+        }
+        
+        function renderColorSelector(gameData) {
+            const selector = document.getElementById('color-selector');
+            selector.innerHTML = '';
+            const takenColors = Object.values(gameData.players).filter(p=>p.uid !== userId).map(p => p.color);
+            Object.values(availableColors).forEach(color => {
+                const swatch = document.createElement('div');
+                swatch.className = 'color-swatch';
+                swatch.style.backgroundColor = color.fill;
+                swatch.dataset.color = color.id;
+                if (takenColors.includes(color.id)) swatch.classList.add('taken');
+                if (localPlayerInfo?.color === color.id) swatch.classList.add('selected');
+                selector.appendChild(swatch);
+            });
+        }
+
+        document.getElementById('color-selector').addEventListener('click', (e) => {
+            if (e.target.classList.contains('color-swatch') && !e.target.classList.contains('taken')) {
+                const color = e.target.dataset.color;
+                if (localPlayerInfo) localPlayerInfo.color = color;
+                updatePlayerDetails();
+            }
+        });
+
+        async function updatePlayerDetails() {
+            if (!gameId || gameId === 'SOLO_GAME') return;
+            const name = document.getElementById('player-name-input').value.trim() || `Player ${localPlayerInfo.id.slice(-1)}`;
+            const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+            await updateDoc(gameRef, {
+                [`players.${userId}.name`]: name,
+                [`players.${userId}.color`]: localPlayerInfo.color
+            });
+        }
+
+        async function handleChat(e) {
+            if (e.key !== 'Enter' || isGameOver) return;
+            const input = e.target;
+            const text = input.value.trim();
+            if (text === '') return;
+            input.value = '';
+
+            const message = {
+                senderName: localPlayerInfo.name,
+                senderColor: availableColors[localPlayerInfo.color].stroke,
+                text,
+                timestamp: Date.now()
+            };
+
+            if (gameId === 'SOLO_GAME') {
+                window.soloGameState.chatMessages.push(message);
+                updateChatUI(window.soloGameState.chatMessages);
+            } else {
+                const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                await updateDoc(gameRef, { chatMessages: arrayUnion(message) });
+            }
+        }
+        
+        function updateChatUI(messages) {
+            const chatBox = document.getElementById('chat-messages');
+            if (!messages) return;
+            chatBox.innerHTML = messages.slice(-10).map(msg => `<div><strong style="color: ${msg.senderColor}">${msg.senderName}:</strong> ${msg.text}</div>`).join('');
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function updatePlayerLegend(gameData) {
+            const legendBox = document.getElementById('player-legend');
+            if(!gameData || !gameData.players) return;
+            const players = Object.values(gameData.players).sort((a,b) => a.id.localeCompare(b.id));
+            legendBox.innerHTML = players.map(p => {
+                const color = availableColors[p.color];
+                return `<div class="flex items-center space-x-2 ${p.isOut ? 'player-out' : ''}">
+                    <div class="w-3 h-3 rounded-full" style="background-color: ${color.fill}; border: 1px solid ${color.stroke}"></div>
+                    <span>${p.name}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function initPhysics(gameData) {
+            const gameContainer = document.getElementById('game-container');
+            gameContainer.innerHTML = '';
+            isGameOver = false;
+            Object.keys(bodies).forEach(key => delete bodies[key]);
+
+            engine = Matter.Engine.create({ gravity: { x: 0, y: 0 } });
+            const containerWidth = gameContainer.clientWidth;
+            const containerHeight = gameContainer.clientHeight;
+            
+            render = Matter.Render.create({ element: gameContainer, engine: engine, options: { width: containerWidth, height: containerHeight, wireframes: false, background: 'transparent' } });
+            
+            const radius = containerWidth / 2 * 0.95;
+            const penHeight = 80; const penWidth = 12;
+
+            const positions = {
+                2: [{ x: 0, y: -radius/2, a: 0 }, { x: 0, y: radius/2, a: Math.PI }],
+                3: [{ x: 0, y: -radius/1.5, a: 0 }, { x: -radius/1.7, y: radius/2, a: 1.2 }, { x: radius/1.7, y: radius/2, a: -1.2 }],
+                4: [{ x: 0, y: -radius/1.5, a: 0 }, { x: 0, y: radius/1.5, a: Math.PI }, { x: -radius/1.5, y: 0, a: Math.PI/2 }, { x: radius/1.5, y: 0, a: -Math.PI/2 }]
+            }[numPlayers] || [];
+            
+            const sortedPlayers = Object.values(gameData.players).sort((a,b) => a.id.localeCompare(b.id));
+
+            sortedPlayers.forEach((p, i) => {
+                 if (p.isOut) return;
+                 const pos = positions[i];
+                 const color = availableColors[p.color] || availableColors.red;
+                 bodies[p.id] = Matter.Bodies.fromVertices(
+                    containerWidth/2 + pos.x, containerHeight/2 + pos.y, 
+                    [[ {x: -penWidth/2, y: -penHeight/2}, {x: penWidth/2, y: -penHeight/2}, {x: penWidth/2, y: penHeight/2 - 10}, {x: 0, y: penHeight/2}, {x: -penWidth/2, y: penHeight/2 - 10} ]],
+                    { angle: pos.a, mass: 10, restitution: 0.5, friction: 0.1, frictionAir: 0.025, label: p.id, render: { fillStyle: color.fill, strokeStyle: color.stroke, lineWidth: 2 } }
+                );
+            });
+            Matter.Composite.add(engine.world, Object.values(bodies));
+            
+            runner = Matter.Runner.create();
+            Matter.Runner.run(runner, engine);
+            Matter.Render.run(render);
+
+            setupMouseControl();
+            
+            Matter.Events.on(engine, 'afterUpdate', () => {
+                if(isGameOver) return;
+                Object.values(bodies).forEach(body => {
+                    const dist = Math.hypot(body.position.x - containerWidth/2, body.position.y - containerHeight/2);
+                    if (dist > radius) handlePlayerOut(body.label);
+                });
+                const isMoving = Object.values(bodies).some(body => Matter.Vector.magnitude(body.velocity) > 0.15 || Math.abs(body.angularVelocity) > 0.015);
+                if (hasFlicked && !isMoving) {
+                    hasFlicked = false;
+                    advanceTurn();
+                }
+            });
+
+            Matter.Events.on(render, 'afterRender', () => {
+                if (isDragging && dragStartPos && dragEndPos) {
+                    const ctx = render.context;
+                    const angle = Matter.Vector.angle(dragEndPos, dragStartPos);
+                    const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
+                    ctx.beginPath();
+                    ctx.moveTo(dragStartPos.x, dragStartPos.y);
+                    ctx.lineTo(dragStartPos.x + Math.cos(angle) * power, dragStartPos.y + Math.sin(angle) * power);
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+                    ctx.lineWidth = 5;
+                    ctx.setLineDash([10, 10]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            });
+        }
+        
+        let isDragging = false, hasFlicked = false;
+        let dragStartPos = null, dragEndPos = null;
+
+        function displayEliminationMessage(eliminatorName, eliminatedName) {
+            const messageEl = document.getElementById('elimination-message');
+            if (!messageEl || !eliminatorName || !eliminatedName) return;
+            const gameData = (gameId === 'SOLO_GAME') ? window.soloGameState : currentGameData;
+            if (!gameData.players) return;
+            const eliminator = Object.values(gameData.players).find(p=>p.name === eliminatorName);
+            const eliminated = Object.values(gameData.players).find(p=>p.name === eliminatedName);
+            const eliminatorColor = availableColors[eliminator?.color]?.stroke || '#fff';
+            const eliminatedColor = availableColors[eliminated?.color]?.stroke || '#fff';
+            messageEl.innerHTML = `<span style="color: ${eliminatorColor}">${eliminatorName}</span> knocked out <span style="color: ${eliminatedColor}">${eliminatedName}</span>!`;
+            messageEl.classList.remove('opacity-0');
+            setTimeout(() => { messageEl.classList.add('opacity-0'); }, 2500);
+        }
+
+        function setupMouseControl() {
+            const canvas = render.canvas;
+            const handlePointerDown = (e) => {
+                e.preventDefault();
+                if (!isMyTurn || isGameOver) return;
+                const mousePos = { x: e.offsetX, y: e.offsetY };
+                const myBody = bodies[localPlayerInfo.id];
+                if (myBody && Matter.Query.point([myBody], mousePos).length > 0) {
+                    isDragging = true;
+                    dragStartPos = mousePos; 
+                    dragEndPos = mousePos;
+                }
+            };
+            const handlePointerMove = (e) => { e.preventDefault(); if (!isDragging) return; dragEndPos = { x: e.offsetX, y: e.offsetY }; };
+            const handlePointerUp = (e) => {
+                e.preventDefault(); if (!isDragging) return;
+                isDragging = false;
+                const forceMagnitude = Matter.Vector.magnitude(Matter.Vector.sub(dragEndPos, dragStartPos)) * 0.002;
+                const forceAngle = Matter.Vector.angle(dragStartPos, dragEndPos);
+                const forceVector = { x: Math.cos(forceAngle) * forceMagnitude, y: Math.sin(forceAngle) * forceMagnitude };
+                const event = { type: 'flick', playerId: localPlayerInfo.id, force: forceVector, position: dragStartPos };
+                if (gameId === 'SOLO_GAME') processEvents([event]);
+                else {
+                    const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                    updateDoc(gameRef, { events: [event] });
+                }
+                hasFlicked = true; isMyTurn = false;
+                dragStartPos = null; dragEndPos = null;
+            };
+            canvas.addEventListener('pointerdown', handlePointerDown);
+            canvas.addEventListener('pointermove', handlePointerMove);
+            canvas.addEventListener('pointerup', handlePointerUp);
+            canvas.addEventListener('pointerleave', handlePointerUp);
+        }
+
+        function startGame(gameData) {
+            gameScreen.classList.remove('hidden');
+            startScreen.classList.add('hidden');
+            lobbyScreen.classList.add('hidden');
+            initPhysics(gameData);
+            handleTurnChange(gameData);
+            updatePlayerLegend(gameData);
+        }
+        
+        function handleTurnChange(gameData) {
+            if (isGameOver || !gameData.players) return;
+            const turnText = document.getElementById('turn-text');
+            const turnPlayerId = gameData.turn;
+            const turnPlayer = Object.values(gameData.players).find(p => p.id === turnPlayerId);
+            isMyTurn = localPlayerInfo && (turnPlayerId === localPlayerInfo.id) && !localPlayerInfo.isOut;
+            let turnMessage = `${turnPlayer?.name}'s Turn`;
+            if (isMyTurn) turnMessage = "Your Turn!";
+            turnText.innerText = turnMessage;
+            turnText.style.color = availableColors[turnPlayer?.color]?.stroke || '#ffffff';
+            turnText.style.textShadow = isMyTurn ? '0 0 15px #fff, 0 0 25px #fff' : 'none';
+            if(gameId === 'SOLO_GAME' && gameData.players[turnPlayer?.uid]?.isAI){
+                setTimeout(() => aiTurn(gameData), 1000);
+            }
+        }
+        
+        function aiTurn(gameData) {
+            const aiPlayerId = gameData.turn;
+            const aiBody = bodies[aiPlayerId];
+            if(!aiBody || isGameOver) { advanceTurn(); return; }
+            let targets = Object.values(bodies).filter(b => b.label !== aiPlayerId && !b.isOut);
+            if (targets.length === 0) { advanceTurn(); return; }
+            let closestTarget = null;
+            let minDistance = Infinity;
+            targets.forEach(target => {
+                const distance = Matter.Vector.magnitude(Matter.Vector.sub(aiBody.position, target.position));
+                if (distance < minDistance) { minDistance = distance; closestTarget = target; }
+            });
+            const direction = Matter.Vector.sub(closestTarget.position, aiBody.position);
+            const power = 0.04 + Math.random() * 0.05;
+            const force = Matter.Vector.mult(Matter.Vector.normalise(direction), power);
+            const forcePosition = { x: aiBody.position.x + (Math.random() - 0.5) * 10, y: aiBody.position.y + (Math.random() - 0.5) * 40 };
+            const event = { type: 'flick', playerId: aiPlayerId, force, position: forcePosition };
+            processEvents([event]);
+            setTimeout(() => { hasFlicked = true; }, 500);
+        }
+
+        async function advanceTurn() {
+            if (isGameOver) return;
+            let gameData = (gameId === 'SOLO_GAME') ? window.soloGameState : currentGameData;
+
+            if (gameId !== 'SOLO_GAME') {
+                 if (!isCreator) return;
+                 const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                 const gameSnap = await getDoc(gameRef);
+                 if (!gameSnap.exists()) return;
+                 gameData = gameSnap.data();
+            }
+            const activePlayers = Object.values(gameData.players).filter(p => !p.isOut).sort((a,b) => a.id.localeCompare(b.id));
+            if (activePlayers.length < 2) { checkForWinner(gameData); return; }
+            const currentIndex = activePlayers.findIndex(p => p.id === gameData.turn);
+            const nextPlayer = activePlayers[(currentIndex + 1) % activePlayers.length];
+            if (gameId === 'SOLO_GAME') {
+                gameData.turn = nextPlayer.id;
+                handleTurnChange(gameData);
+            } else {
+                await updateDoc(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), { turn: nextPlayer.id, events: [] });
+            }
+        }
+
+        function processEvents(events) {
+            if (!events?.length) return;
+            events.forEach(event => {
+                if (event.type === 'flick') {
+                    const body = bodies[event.playerId];
+                    if(body) Matter.Body.applyForce(body, event.position, event.force);
+                } else if (event.type === 'out') {
+                    const body = bodies[event.playerId];
+                    if (body && !body.isOut) {
+                        body.isOut = true;
+                        Matter.Composite.remove(engine.world, body);
+                        delete bodies[event.playerId];
+                    }
+                }
+            });
+             if (gameId !== 'SOLO_GAME' && isCreator) {
+                updateDoc(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), { events: [] }).catch(() => {});
+            }
+        }
+        
+        function handlePlayerOut(playerId) {
+            const body = bodies[playerId];
+            if (!body || body.isOut) return;
+            const gameData = (gameId === 'SOLO_GAME') ? window.soloGameState : currentGameData;
+            if (!gameData || !gameData.players) return;
+            const turnPlayer = Object.values(gameData.players).find(p => p.id === gameData.turn);
+            const eliminatedPlayer = Object.values(gameData.players).find(p => p.id === playerId);
+            if (!turnPlayer || !eliminatedPlayer) return;
+            const eliminatorName = turnPlayer.name;
+            const eliminatedName = eliminatedPlayer.name;
+            const event = { type: 'out', playerId: playerId };
+            if (gameId === 'SOLO_GAME') {
+                const playerUID = Object.keys(window.soloGameState.players).find(uid => window.soloGameState.players[uid].id === playerId);
+                if (playerUID) window.soloGameState.players[playerUID].isOut = true;
+                processEvents([event]);
+                displayEliminationMessage(eliminatorName, eliminatedName);
+                updatePlayerLegend(window.soloGameState);
+                checkForWinner(window.soloGameState);
+            } else if (isMyTurn) {
+                const playerEntry = Object.entries(gameData.players).find(([uid, data]) => data.id === playerId);
+                if (playerEntry) {
+                    const playerUID = playerEntry[0];
+                    const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                    updateDoc(gameRef, { 
+                        events: [event], 
+                        lastElimination: { eliminator: eliminatorName, eliminated: eliminatedName, timestamp: Date.now() },
+                        [`players.${playerUID}.isOut`]: true 
+                    }).catch(()=>{});
+                }
+            }
+        }
+        
+        function checkForWinner(gameData) {
+            if (isGameOver || !gameData.players) return;
+            const activePlayers = Object.values(gameData.players).filter(p => !p.isOut);
+            if(activePlayers.length <= 1) {
+                isGameOver = true;
+                const winnerName = activePlayers.length === 1 ? activePlayers[0].name : "Nobody";
+                setTimeout(() => endGame(`${winnerName} Wins!`), 1500);
+            }
+        }
+        
+        function endGame(winnerText) {
+            document.getElementById('winner-display').innerText = winnerText;
+            gameScreen.classList.add('hidden');
+            endScreen.classList.remove('hidden');
+            if (gameUnsubscribe) { gameUnsubscribe(); gameUnsubscribe = null; }
+            if (runner) Matter.Runner.stop(runner);
+            if (render) { Matter.Render.stop(render); render.canvas.remove(); }
+            engine = null;
+        }
+
+        async function resetToStart() {
+            if (gameUnsubscribe) {
+                gameUnsubscribe();
+                gameUnsubscribe = null;
+            }
+            if(gameId && gameId !== 'SOLO_GAME' && isCreator) {
+                try {
+                    const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                    await deleteDoc(gameRef);
+                } catch(e) { console.error("Error deleting game:", e); }
+            }
+            window.location.reload();
+        }
+        
+        init();
+    </script>
+</body>
+</html>
+
