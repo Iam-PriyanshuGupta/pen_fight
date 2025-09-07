@@ -107,6 +107,7 @@
                 <button id="play-again-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg">Main Menu</button>
                 <button id="rematch-btn" class="btn text-white font-bold py-3 px-6 rounded-lg text-lg bg-green-600 border-green-800 hover:bg-green-500">Rematch</button>
             </div>
+            <div id="rematch-status" class="text-sm text-gray-300"></div>
         </div>
     </div>
     
@@ -115,7 +116,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        
+        // --- PASTE YOUR FIREBASE CONFIG FROM YOUR PROJECT'S SETTINGS HERE ---
         const firebaseConfig = {
             apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
             authDomain: "game-74628.firebaseapp.com",
@@ -215,7 +216,7 @@
             document.getElementById('max-players').innerText = numPlayers;
             gameId = Math.random().toString(36).substring(2, 7).toUpperCase();
             document.getElementById('game-id-display').innerText = gameId;
-            const gameData = { numPlayers, players: {}, status: 'waiting', turn: 'player1', events: [], chatMessages: [], creatorId: userId, gameRound: 1 };
+            const gameData = { numPlayers, players: {}, status: 'waiting', turn: 'player1', events: [], chatMessages: [], creatorId: userId, gameRound: 1, rematchVotes: [] };
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await setDoc(gameRef, gameData);
             await joinGame(true);
@@ -258,19 +259,23 @@
                 if(gameData.players) localPlayerInfo = gameData.players[userId];
                 
                 if (gameData.status === 'waiting') updateLobbyUI(gameData);
+                
                 const playerCount = Object.keys(gameData.players).length;
-                if (gameData.status === 'waiting' && playerCount === gameData.numPlayers) {
+                if (gameData.status === 'waiting' && playerCount === gameData.numPlayers && isCreator) {
                     updateDoc(gameRef, { status: 'playing' });
                 }
+                
                 if (gameData.status === 'playing' && (engine === undefined || lastGameRound !== gameData.gameRound)) {
                     lastGameRound = gameData.gameRound;
                     startGame(gameData);
                 }
+                
                 if (engine) {
                     if (gameData.lastElimination?.timestamp > lastEliminationTimestamp) {
                         lastEliminationTimestamp = gameData.lastElimination.timestamp;
                         displayEliminationMessage(gameData.lastElimination.eliminator, gameData.lastElimination.eliminated);
                     }
+                    updateRematchStatus(gameData);
                     updateChatUI(gameData.chatMessages);
                     updatePlayerLegend(gameData);
                     handleTurnChange(gameData);
@@ -426,7 +431,7 @@
             Matter.Events.on(render, 'afterRender', () => {
                 if (isDragging && dragStartPos && dragEndPos) {
                     const ctx = render.context;
-                    const angle = Matter.Vector.angle(dragEndPos, dragStartPos);
+                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos);
                     const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
                     ctx.beginPath();
                     ctx.moveTo(dragStartPos.x, dragStartPos.y);
@@ -499,6 +504,7 @@
             lobbyScreen.classList.add('hidden');
             document.getElementById('rematch-btn').disabled = false;
             document.getElementById('end-screen-status').innerText = 'Excellent match!';
+            document.getElementById('rematch-status').innerHTML = '';
             initPhysics(gameData);
             handleTurnChange(gameData);
             updatePlayerLegend(gameData);
@@ -597,7 +603,7 @@
                 displayEliminationMessage(eliminatorName, eliminatedName);
                 updatePlayerLegend(window.soloGameState);
                 checkForWinner(window.soloGameState);
-            } else if (isCreator) {
+            } else if (isCreator) { // Only the creator can eliminate players
                 const playerEntry = Object.entries(gameData.players).find(([uid, data]) => data.id === playerId);
                 if (playerEntry) {
                     const playerUID = playerEntry[0];
@@ -620,36 +626,29 @@
                 setTimeout(() => endGame(`${winnerName} Wins!`), 1500);
             }
         }
+
+        function updateRematchStatus(gameData) {
+            if (!endScreen.classList.contains('hidden')) {
+                const statusEl = document.getElementById('rematch-status');
+                const votes = gameData.rematchVotes || [];
+                const readyPlayers = Object.values(gameData.players).filter(p => votes.includes(p.uid));
+                statusEl.innerHTML = `Ready: ${readyPlayers.map(p => p.name).join(', ')}`;
+            }
+        }
         
         async function requestRematch() {
+            document.getElementById('rematch-btn').disabled = true;
+            document.getElementById('end-screen-status').innerText = 'Rematch requested! Waiting for others...';
             if (gameId === 'SOLO_GAME') {
                 startSoloGame();
                 return;
             }
-            document.getElementById('rematch-btn').disabled = true;
-            document.getElementById('end-screen-status').innerText = 'Rematch requested! Waiting for others...';
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await updateDoc(gameRef, {
                 rematchVotes: arrayUnion(userId)
             });
 
-            const gameSnap = await getDoc(gameRef);
-            const gameData = gameSnap.data();
-            if (gameData.rematchVotes?.length === gameData.numPlayers && isCreator) {
-                const batch = writeBatch(db);
-                const updates = {
-                    turn: 'player1',
-                    events: [],
-                    lastElimination: null,
-                    rematchVotes: [],
-                    gameRound: (gameData.gameRound || 1) + 1
-                };
-                Object.keys(gameData.players).forEach(uid => {
-                    updates[`players.${uid}.isOut`] = false;
-                });
-                batch.update(gameRef, updates);
-                await batch.commit();
-            }
+            // The rematch logic is now handled in the onSnapshot listener by the creator
         }
         
         function endGame(winnerText) {
@@ -659,7 +658,7 @@
             if (gameUnsubscribe) { gameUnsubscribe(); gameUnsubscribe = null; }
             if (runner) Matter.Runner.stop(runner);
             if (render) { Matter.Render.stop(render); render.canvas.remove(); }
-            engine = undefined; // Set engine to undefined to allow re-initialization
+            engine = undefined;
         }
 
         async function resetToStart() {
