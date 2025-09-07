@@ -117,7 +117,6 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- PASTE YOUR FIREBASE CONFIG FROM YOUR PROJECT'S SETTINGS HERE ---
         const firebaseConfig = {
           apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
           authDomain: "game-74628.firebaseapp.com",
@@ -126,7 +125,6 @@
           messagingSenderId: "609648882792",
           appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
         };
-        // --------------------------------------------------------------------
         
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'pen-fight-arena-default';
         
@@ -227,9 +225,9 @@
         }
         
         async function joinGame(isHost = false) {
+            isCreator = isHost;
             const inputId = isHost ? gameId : document.getElementById('join-id-input').value.toUpperCase();
             if (!inputId) return;
-            isCreator = isHost;
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", inputId);
             const gameSnap = await getDoc(gameRef);
             if (!gameSnap.exists()) {
@@ -274,9 +272,7 @@
                         lastEliminationTimestamp = gameData.lastElimination.timestamp;
                         displayEliminationMessage(gameData.lastElimination.eliminator, gameData.lastElimination.eliminated);
                     }
-                    if(!isCreator) { // Clients update their physics state from the host
-                        updateBodiesFromState(gameData.gameState);
-                    }
+                    if(!isCreator) updateBodiesFromState(gameData.gameState);
                     updateRematchStatus(gameData);
                     updateChatUI(gameData.chatMessages);
                     updatePlayerLegend(gameData);
@@ -327,18 +323,18 @@
         document.getElementById('color-selector').addEventListener('click', (e) => {
             if (e.target.classList.contains('color-swatch') && !e.target.classList.contains('taken')) {
                 const color = e.target.dataset.color;
-                if (localPlayerInfo) localPlayerInfo.color = color;
-                updatePlayerDetails();
+                if (localPlayerInfo) updatePlayerDetails(undefined, color);
             }
         });
 
-        async function updatePlayerDetails() {
+        async function updatePlayerDetails(name, color) {
             if (!gameId || gameId === 'SOLO_GAME') return;
-            const name = document.getElementById('player-name-input').value.trim() || `Player ${localPlayerInfo.id.slice(-1)}`;
+            const newName = name !== undefined ? name : (document.getElementById('player-name-input').value.trim() || `Player ${localPlayerInfo.id.slice(-1)}`);
+            const newColor = color !== undefined ? color : localPlayerInfo.color;
             const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
             await updateDoc(gameRef, {
-                [`players.${userId}.name`]: name,
-                [`players.${userId}.color`]: localPlayerInfo.color
+                [`players.${userId}.name`]: newName,
+                [`players.${userId}.color`]: newColor
             });
         }
 
@@ -422,7 +418,7 @@
             
             runner = Matter.Runner.create();
             Matter.Render.run(render);
-            if (isCreator) { // Only the host runs the physics simulation
+            if (isCreator) {
                 Matter.Runner.run(runner, engine);
             }
 
@@ -440,7 +436,6 @@
                         hasFlicked = false;
                         advanceTurn();
                     }
-                    // Host sends gamestate to clients
                     const gameState = {};
                     Object.keys(bodies).forEach(id => {
                         const body = bodies[id];
@@ -455,7 +450,7 @@
             Matter.Events.on(render, 'afterRender', () => {
                 if (isDragging && dragStartPos && dragEndPos) {
                     const ctx = render.context;
-                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos);
+                    const angle = Matter.Vector.angle(dragEndPos, dragStartPos);
                     const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
                     const maxLineLength = 50;
                     const displayLength = Math.min(power, maxLineLength);
@@ -506,7 +501,7 @@
             const handlePointerUp = (e) => {
                 e.preventDefault(); if (!isDragging) return;
                 isDragging = false;
-                const forceMagnitude = Matter.Vector.magnitude(Matter.Vector.sub(dragEndPos, dragStartPos)) * 0.002;
+                const forceMagnitude = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos)) * 0.002;
                 const forceAngle = Matter.Vector.angle(dragEndPos, dragStartPos);
                 const forceVector = { x: Math.cos(forceAngle) * forceMagnitude, y: Math.sin(forceAngle) * forceMagnitude };
                 const event = { type: 'flick', playerId: localPlayerInfo.id, force: forceVector, position: dragStartPos };
@@ -596,7 +591,7 @@
             events.forEach(event => {
                 if (event.type === 'flick') {
                     hasFlicked = true;
-                    if(isCreator) { // Only host processes flick physics
+                    if(isCreator) {
                         const body = bodies[event.playerId];
                         if(body) Matter.Body.applyForce(body, event.position, event.force);
                     }
@@ -674,6 +669,24 @@
                 const votes = gameData.rematchVotes || [];
                 const readyPlayers = Object.values(gameData.players).filter(p => votes.includes(p.uid));
                 statusEl.innerHTML = `Ready for rematch: ${readyPlayers.map(p => p.name).join(', ')}`;
+
+                if(readyPlayers.length === gameData.numPlayers && isCreator){
+                     const gameRef = doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId);
+                     const batch = writeBatch(db);
+                     const updates = { 
+                         status: 'playing',
+                         turn: 'player1', 
+                         events: [], 
+                         lastElimination: null, 
+                         rematchVotes: [], 
+                         gameRound: (gameData.gameRound || 1) + 1 
+                    };
+                     Object.keys(gameData.players).forEach(uid => {
+                         updates[`players.${uid}.isOut`] = false;
+                     });
+                     batch.update(gameRef, updates);
+                     batch.commit();
+                }
             }
         }
         
