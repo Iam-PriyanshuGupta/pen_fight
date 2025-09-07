@@ -118,12 +118,12 @@
 
         // --- PASTE YOUR FIREBASE CONFIG FROM YOUR PROJECT'S SETTINGS HERE ---
         const firebaseConfig = {
-            apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
-            authDomain: "game-74628.firebaseapp.com",
-            projectId: "game-74628",
-            storageBucket: "game-74628.firebasestorage.app",
-            messagingSenderId: "609648882792",
-            appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
+          apiKey: "AIzaSyCHC4NpZ2i3RbFy3ovANUgkmqcJZfPGyT4",
+          authDomain: "game-74628.firebaseapp.com",
+          projectId: "game-74628",
+          storageBucket: "game-74628.firebasestorage.app",
+          messagingSenderId: "609648882792",
+          appId: "1:609648882792:web:2cf29cb13a16fe47a337dd"
         };
         // --------------------------------------------------------------------
         
@@ -267,6 +267,15 @@
                 
                 if (gameData.status === 'playing' && (engine === undefined || lastGameRound !== gameData.gameRound)) {
                     lastGameRound = gameData.gameRound;
+                    if(isCreator && gameData.rematchVotes?.length === gameData.numPlayers) {
+                         const batch = writeBatch(db);
+                         const updates = { turn: 'player1', events: [], lastElimination: null, rematchVotes: [] };
+                         Object.keys(gameData.players).forEach(uid => {
+                             updates[`players.${uid}.isOut`] = false;
+                         });
+                         batch.update(gameRef, updates);
+                         batch.commit();
+                    }
                     startGame(gameData);
                 }
                 
@@ -431,14 +440,20 @@
             Matter.Events.on(render, 'afterRender', () => {
                 if (isDragging && dragStartPos && dragEndPos) {
                     const ctx = render.context;
-                    const angle = Matter.Vector.angle(dragStartPos, dragEndPos);
+                    const myBody = bodies[localPlayerInfo.id];
+                    if (!myBody) return;
+
+                    const angle = Matter.Vector.angle(dragEndPos, dragStartPos);
                     const power = Matter.Vector.magnitude(Matter.Vector.sub(dragStartPos, dragEndPos));
+                    const maxLineLength = 50;
+                    const displayLength = Math.min(power, maxLineLength);
+
                     ctx.beginPath();
-                    ctx.moveTo(dragStartPos.x, dragStartPos.y);
-                    ctx.lineTo(dragStartPos.x + Math.cos(angle) * power, dragStartPos.y + Math.sin(angle) * power);
+                    ctx.moveTo(myBody.position.x, myBody.position.y);
+                    ctx.lineTo(myBody.position.x + Math.cos(angle) * displayLength, myBody.position.y + Math.sin(angle) * displayLength);
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-                    ctx.lineWidth = 5;
-                    ctx.setLineDash([10, 10]);
+                    ctx.lineWidth = 3;
+                    ctx.setLineDash([5, 5]);
                     ctx.stroke();
                     ctx.setLineDash([]);
                 }
@@ -603,7 +618,7 @@
                 displayEliminationMessage(eliminatorName, eliminatedName);
                 updatePlayerLegend(window.soloGameState);
                 checkForWinner(window.soloGameState);
-            } else if (isCreator) { // Only the creator can eliminate players
+            } else if (isCreator) { 
                 const playerEntry = Object.entries(gameData.players).find(([uid, data]) => data.id === playerId);
                 if (playerEntry) {
                     const playerUID = playerEntry[0];
@@ -632,7 +647,24 @@
                 const statusEl = document.getElementById('rematch-status');
                 const votes = gameData.rematchVotes || [];
                 const readyPlayers = Object.values(gameData.players).filter(p => votes.includes(p.uid));
-                statusEl.innerHTML = `Ready: ${readyPlayers.map(p => p.name).join(', ')}`;
+                statusEl.innerHTML = `Ready for rematch: ${readyPlayers.map(p => p.name).join(', ')}`;
+
+                if(readyPlayers.length === gameData.numPlayers && isCreator){
+                     const batch = writeBatch(db);
+                     const updates = { 
+                         status: 'playing',
+                         turn: 'player1', 
+                         events: [], 
+                         lastElimination: null, 
+                         rematchVotes: [], 
+                         gameRound: (gameData.gameRound || 1) + 1 
+                    };
+                     Object.keys(gameData.players).forEach(uid => {
+                         updates[`players.${uid}.isOut`] = false;
+                     });
+                     batch.update(doc(db, "artifacts", appId, "public/data/pen-fight-games", gameId), updates);
+                     batch.commit();
+                }
             }
         }
         
@@ -647,8 +679,6 @@
             await updateDoc(gameRef, {
                 rematchVotes: arrayUnion(userId)
             });
-
-            // The rematch logic is now handled in the onSnapshot listener by the creator
         }
         
         function endGame(winnerText) {
